@@ -1,0 +1,4 @@
+- added shared memory for display process to speed up time between rendered image and display output
+- added conversion to numpy arrays in Yolo model
+	--> slowed down total processing with queue because queue handling not longer handled by PyTorch with shared memory
+	--> preparation for whole shared memory approach from main process to children

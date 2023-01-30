@@ -1,0 +1,7 @@
+python YoloFeatureMaps.py --conf 0.4 --device gpu
+
+example with specification of:
+- source
+- number worker processes
+- amount of feature map calculations every Nth frame
+python YoloFeatureMaps.py --source 0 --numproc 3 --conf 0.4 --device gpu --numFMStream 1
