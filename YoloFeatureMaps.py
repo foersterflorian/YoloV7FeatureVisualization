@@ -148,7 +148,7 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
     ckpt = torch.load(model_path, map_location=device) # load model from weights
     model = Model(ckpt['model'].yaml, ch=3, device=device).to(device) # build model with class Model from Yolo project with user-modified properties
     
-    # normalization value in model
+    # normalization value in model (grayscale feature map conversion)
     model.norm_val = model.norm_val.to(device)
     
     # parse weights
@@ -207,15 +207,10 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
 def prediction(source, model, device, threading_queue=None, event_handler_thread=None, event_terminating=None, img_size=640, n_th_frame=1, 
                 save_img=False, output_img='output/detect.jpg', conf_thres=0.25):
     """
-    TESTING, NOT FINISHED YET
-    ONLY RETURNS ONE TENSOR COLLECTION FOR TESTING OF VEDO RENDERING
-    
-    loads images from given path and executes prediction
-    only static, has to be enhanced for video feed predictions
-    
-    return:
-        Prediction tensor
-        Tensor collection with output of each layer (used for feature map visualization)
+    main loop for constant image interference
+    - usable for webcam feeds and single images
+    - extracts feature maps as model property and handles these to worker processes which post-process the images
+    - with video stream: exits loop if global variable 'prog_exit' is set (by keyboard listener in main program)
     """
     # control program execution / stop execution variable
     global prog_exit
@@ -239,10 +234,8 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
         webcam = False
         
     if webcam:
-        #view_img = check_imshow()
         if device.type != 'cpu':
             cudnn.benchmark = True  # set True to speed up constant image size inference
-        #dataset = LoadWebcam(pipe=source, img_size=imgsz, stride=stride)
         dataset = LoadWebcamThreaded(pipe=source, img_size=imgsz, stride=stride, frame_count=1)
     else:
         dataset = LoadImages(source, img_size=imgsz, stride=stride)
@@ -253,15 +246,13 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
     else:
         half = False
     
-    #time.sleep(1)
     num_iter = 0
     # n_th_frame --> only broadcast feature maps of every n-th frame
     
     t0 = time.time()
     # for single images only length 1
     for path, img, im0s, vid_cap in dataset:
-    
-        ######################
+        
         if prog_exit: # stop execution when global variable is set
             event_terminating.set() # start terminating child processes
             break
@@ -297,42 +288,31 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
         if not event_handler_thread.is_set() and (num_iter % n_th_frame) == 0:
             threading_queue.put(model.tensor_collection, block=False)
             event_handler_thread.set() # signal to queue thread to handle queue IO
-            #time.sleep(1/1000) # synchronization time to retrieve feature map data, not needed because of thread state check before model prediction
+            #time.sleep(1/1000) # synchronization time to retrieve feature map data, not needed anymore because of thread state check before model prediction
         else: # thread too slow
             print("Threading Queue not empty. Queue handler thread too slow.")
         
         
-        # Process detections
+        # process detections
         for i, det in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
-                #p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
                 p, s, im0, frame = path, '', im0s, dataset.count   
             else:
                 p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
             
-            #p = Path(p)  # to Path
-            #save_path = str(save_dir / p.name)  # img.jpg
-            #txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
-            #s += '%gx%g ' % img.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             if len(det):
-                # Rescale boxes from img_size to im0 size
+                # rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
 
-                # Print results
+                # print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
                     #s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
-                # Write results
+                # write results
                 for *xyxy, conf, cls in reversed(det):
-                    #if save_txt:  # Write to file
-                        #xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        #line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
-                        #with open(txt_path + '.txt', 'a') as f:
-                            #f.write(('%g ' * len(line)).rstrip() % line + '\n')
-
-                    #if save_img or view_img:  # Add bbox to image
+                    # add bbox to image
                     label = f'{names[int(cls)]} {conf:.2f}'
                     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
             
@@ -340,7 +320,7 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
             #print(f"Time for image post-processing: {(t3 - t2) * 1000} ms")
             #print(f"Time for interference & image post-processing: {(t3 - t1) * 1000} ms")
             
-            # Stream results
+            # stream results
             if webcam:
                 cv2.imshow('Webcam', im0)
                 cv2.waitKey(1)  # 1 millisecond
@@ -365,14 +345,9 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
 def prediction_wo_mp(source, model, device, img_size=640, save_img=False, output_img='output/detect.jpg', use_colab=False, conf_thres=0.25):
     """
     TESTING AND DEBUGGING ONLY
-    ONLY RETURNS ONE TENSOR COLLECTION FOR TESTING PURPOSES
-    
+    CONTAINS LEGACY CODE
     loads images from given path and executes prediction
-    only static, has to be enhanced for video feed predictions
-    
-    return:
-        Prediction tensor
-        Tensor collection with output of each layer (used for feature map visualization)
+    only static
     """
     
     # set value for nms, later use flags in Python programm
@@ -521,13 +496,15 @@ def queue_handler(threading_queue, event_handler_thread,
     shm_array_dict = {}
     buff_list_thread = []
     for key, metadata in metadata_worker.items():
-        buff_display_name, shape, dtype = metadata
-        existing_shm = mp.shared_memory.SharedMemory(name=buff_display_name)
-        buff_list_thread.append(existing_shm)
-        shm_array_dict[key] = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
+        buff_name, shape, dtype = metadata
+        existing_shm_thread = mp.shared_memory.SharedMemory(name=buff_name)
+        # list needed, otherwise program exits without error message
+        # probably reference is lost in background because variable is overwritten 
+        # in main process and SHM block garbage collected (same memory space for threads)
+        buff_list_thread.append(existing_shm_thread)
+        shm_array_dict[key] = np.ndarray(shape, dtype=dtype, buffer=existing_shm_thread.buf)
     # SHM approach
     # write in arrays of "shm_array_dict" with lock from main handler thread
-    
     # main loop
     while True:
         event_handler_thread.wait()
@@ -559,8 +536,8 @@ def worker_func(worker_id, event_terminating,
     local_array_dict = {}
     buff_list = []
     for key, metadata in metadata_worker.items():
-        buff_display_name, shape, dtype = metadata
-        existing_shm = mp.shared_memory.SharedMemory(name=buff_display_name)
+        buff_name, shape, dtype = metadata
+        existing_shm = mp.shared_memory.SharedMemory(name=buff_name)
         buff_list.append(existing_shm)
         shm_array_dict[key] = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
         local_array_dict[key] = np.ndarray(shape, dtype=dtype)
@@ -717,9 +694,9 @@ def display_results(worker_id, event_terminating, metadata_display, event_displa
         # display image
         lock_display_sync.acquire()
         cv2.imshow("Feature Maps", display_img)
-        cv2.waitKey(1)
         lock_display_sync.release()
         event_display_sync.clear()
+        cv2.waitKey(1)
     
     # clean up
     print(f"Closing SHM buffer in Display Worker with ID {mp.current_process()}")
@@ -792,6 +769,7 @@ if __name__ == '__main__':
     
     # multiprocessing preparations
     print("Preparing multiprocessing environment")
+    mp.set_start_method('spawn') # reproduce behaviour across different OS
     threading_queue = queue.Queue()
     mgr = mp.Manager()
     #mp_q_in = mgr.Queue()
