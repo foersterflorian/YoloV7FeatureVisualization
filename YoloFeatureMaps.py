@@ -8,12 +8,12 @@ os.environ["NUMEXPR_NUM_THREADS"] = "6" # export NUMEXPR_NUM_THREADS=6
 """
 # define number of threads NumPy uses in the background
 # compatibility with multiprocessing
-num_threads = "4"
-os.environ["OMP_NUM_THREADS"] = num_threads
-os.environ["OPENBLAS_NUM_THREADS"] = num_threads
-os.environ["MKL_NUM_THREADS"] = num_threads
-os.environ["VECLIB_MAXIMUM_THREADS"] = num_threads
-os.environ["NUMEXPR_NUM_THREADS"] = num_threads
+NUM_THREADS = "4"
+os.environ["OMP_NUM_THREADS"] = NUM_THREADS
+os.environ["OPENBLAS_NUM_THREADS"] = NUM_THREADS
+os.environ["MKL_NUM_THREADS"] = NUM_THREADS
+os.environ["VECLIB_MAXIMUM_THREADS"] = NUM_THREADS
+os.environ["NUMEXPR_NUM_THREADS"] = NUM_THREADS
 
 import numpy as np
 import cv2
@@ -146,7 +146,7 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
     
     device = torch.device(device_type)
     ckpt = torch.load(model_path, map_location=device) # load model from weights
-    model = Model(ckpt['model'].yaml, ch=3, device=device).to(device) # build model with class Model from Yolo project with user-modified properties
+    model = Model(ckpt['model'].yaml, ch=3, device=device, row_break_after=4).to(device) # build model with class Model from Yolo project with user-modified properties
     
     # normalization value in model (grayscale feature map conversion)
     model.norm_val = model.norm_val.to(device)
@@ -576,7 +576,7 @@ def worker_func(worker_id, event_terminating,
             
             # perform calculation
             #s = time.time()
-            ret = calc_feature_maps_dataset(local_array_dict)
+            ret = calc_feature_maps_dataset(local_array_dict, ncol=8)
             #e = time.time()
             #print(f"Time for feature map calculation: {(e - s) * 1000} ms")
             
@@ -605,18 +605,20 @@ def calc_feature_maps_grid(img_grid, layer_inf):
     img_grid = img_grid.astype(np.uint8)
     
     # resize image
-    target_width = 400
+    target_width = 340
     scale_percent = float(target_width / img_grid.shape[1])
     target_height = int(img_grid.shape[0] * scale_percent)
     dim = (target_width, target_height)
+
     if scale_percent > 1.0: # upsampling
         result = cv2.resize(img_grid, dim, interpolation=cv2.INTER_CUBIC)
     else: # downsampling
         result = cv2.resize(img_grid, dim, interpolation=cv2.INTER_AREA)
     
+    print(f'############### Shape IMG Grid: {img_grid.shape} \t DIM {dim} \t {result.shape = }')
     # create new filled array of desired size
-    size_x = 450
-    size_y = 450
+    size_x = 1080
+    size_y = 480 # = size_x // n_col (from display)
     use_fixed_bound_x = True
     img_canvas = np.full((size_x, size_y), 255, dtype=np.uint8)
     # place smaller image in the greater canvas
@@ -741,7 +743,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
                     prog = 'YoloV7 Realtime Object Detection with Feature Map Visualization',
                     description = 'Displays Live Webcam Video feed with Feature Map Visualization')
-    parser.add_argument('-d', '--device', choices=['cpu','gpu'], dest='device_type', default='cpu',
+    parser.add_argument('-d', '--device', choices=['cpu','gpu'], dest='device_type', default='gpu',
                     help='select device type for Yolo Model, performing on CPU or GPU')
     parser.add_argument('-c', '--conf', dest='conf_thres',
                     type=float, default=0.65,
@@ -807,7 +809,8 @@ if __name__ == '__main__':
     buff_display_name = "display"
     buff_display = mp.shared_memory.SharedMemory(create=True, size=5000000, name=buff_display_name)
     buff_list.append(buff_display)
-    metadata_display = (buff_display_name, (900,1800), np.uint8) # (buffer_name, shape, dtype)
+    # shape depends on given layout
+    metadata_display = (buff_display_name, (1080,3840), np.uint8) # (buffer_name, shape, dtype)
     event_display_sync = mp.Event() # synchronize display process
     lock_display_sync = mp.Lock() # synchronize display process
     #event_display_sync = mgr.Event() # synchronize display process
