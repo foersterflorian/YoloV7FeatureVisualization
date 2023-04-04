@@ -21,3 +21,7 @@ The name of the environment is set to ``YoloFMV``. This can be changed in the YA
 - ``-f, --numFMStream``: every Nth frame is displayed as feature map visualization (default: ``1`` = process every frame --> realtime)
 - ``-w, --weights``: pre-trained model weights (default: ``data/yolov7.pt``)
 - ``-i, --datasetinfo``: path to the information about trained model data like class names as YAML file (default: ``data/coco.yaml``)
+- ``--ncol``: total number of columns in final display image (choice from ``{1,2,4,8}``) (default: ``8``)
+- ``--ncolFM``: total number of columns in the feature maps grid (choice from ``{1,2,4,8}``) (default: ``4``)
+- ``--height``: total height of final display image (default: ``1060``)
+- ``--width``: total width of final display image (default: ``3840``)
