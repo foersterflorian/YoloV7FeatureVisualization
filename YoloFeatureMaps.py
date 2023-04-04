@@ -28,6 +28,7 @@ import multiprocessing.shared_memory
 import queue
 import argparse
 import pickle
+import logging
 from pynput import keyboard
 
 from utils.general import check_img_size, non_max_suppression, scale_coords
@@ -67,9 +68,9 @@ class LoadWebcamThreaded:  # for inference
         self.frame_count = frame_count # define to obtain every frame_count's frame, 1 = every frame
         self.waitTime = 1 / self.fps
         thread = threading.Thread(target=self.update, args=(self.cap,), daemon=True)
-        print("Starting image retrieval thread...")
+        logging.info("Starting image retrieval thread...")
         thread.start()
-        time.sleep(3) # load webcam stream
+        time.sleep(1) # load webcam stream
 
     def __iter__(self):
         self.count = -1
@@ -85,12 +86,12 @@ class LoadWebcamThreaded:  # for inference
         # Copy frame
         img0 = self.img.copy()
         img0 = cv2.flip(img0, 1)  # flip left-right
-        #print(f"IMG SIZE = {img0.shape} \t IMG DTYPE = {img0.dtype}")
+        logging.debug(f"Webcam IMG SIZE = {img0.shape} \t IMG DTYPE = {img0.dtype}")
 
         # Print
         #assert ret_val, f'Camera Error {self.pipe}, Could not retrieve images'
         img_path = 'webcam.jpg'
-        #print(f'webcam {self.count}: ', end='')
+        logging.debug(f'Webcam frame count {self.count}')
 
         # Padded resize
         img = letterbox(img0, self.img_size, stride=self.stride)[0]
@@ -104,7 +105,7 @@ class LoadWebcamThreaded:  # for inference
     def update(self, cap):
         # Read next stream frame in a daemon thread
         n = 0
-        print("Image retrieval thread started successfully.")
+        logging.info("Image retrieval thread started successfully.")
         while cap.isOpened():
             n += 1
             # _, self.imgs[index] = cap.read()
@@ -140,7 +141,7 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
     if device_type != 'cpu':
         if torch.cuda.is_available():
             device_type = 'cuda'
-            print("Set device type to CUDA and building for GPU")
+            logging.info("Set device type to CUDA and building for GPU")
         else:
             raise TypeError("Model should be built for GPU, but no CUDA GPU was found. Use device_type='cpu' instead.")
     
@@ -190,7 +191,7 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
     # run model
     img = torch.from_numpy(img).to(device)
     img = img.half() if half else img.float() # uint8 to fp16/32 
-    #print(f"IMG dtype = {img.dtype}")
+    logging.debug(f"IMG dtype = {img.dtype}")
     img /= 255.0  # 0 - 255 to 0.0 - 1.0
     #img_0 = img
     if img.ndimension() == 3:
@@ -259,7 +260,7 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
         
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float() # uint8 to fp16/32 
-        #print(f"IMG dtype = {img.dtype}")
+        logging.debug(f"IMG dtype = {img.dtype}")
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         #img_0 = img
         if img.ndimension() == 3:
@@ -271,7 +272,7 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
         if not event_handler_thread.is_set():
             pred = model(img, augment=False)[0]
         else:
-            print("[WARNING] Could not start prediction because tensor processing in handling thread not done yet. \
+            logging.warning("[WARNING] Could not start prediction because tensor processing in handling thread not done yet. \
                     \nNecessary to prevent data corruption.")
             continue
         
@@ -279,7 +280,7 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
         pred = non_max_suppression(pred, conf_thres, iou_thres, classes=classes, agnostic=agnostic_nms)
         
         #t2 = time_synchronized()
-        #print(f"Interference Time: {(t2 - t1) * 1000} ms")
+        #logging.debug(f"Interference Time: {(t2 - t1) * 1000} ms")
         torch.cuda.synchronize()
         # synchronize call necessary because feature map dictionary building is asynchronous in Yolo model
         
@@ -290,7 +291,7 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
             event_handler_thread.set() # signal to queue thread to handle queue IO
             #time.sleep(1/1000) # synchronization time to retrieve feature map data, not needed anymore because of thread state check before model prediction
         else: # thread too slow
-            print("Threading Queue not empty. Queue handler thread too slow.")
+            logging.warning("Threading Queue not empty. Queue handler thread too slow.")
         
         
         # process detections
@@ -317,8 +318,8 @@ def prediction(source, model, device, threading_queue=None, event_handler_thread
                     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
             
             #t3 = time.time()
-            #print(f"Time for image post-processing: {(t3 - t2) * 1000} ms")
-            #print(f"Time for interference & image post-processing: {(t3 - t1) * 1000} ms")
+            #logging.debug(f"Time for image post-processing: {(t3 - t2) * 1000} ms")
+            #logging.debug(f"Time for interference & image post-processing: {(t3 - t1) * 1000} ms")
             
             # stream results
             if webcam:
@@ -356,7 +357,7 @@ def prediction_wo_mp(source, model, device, img_size=640, save_img=False, output
     agnostic_nms = False
     
     if use_colab: # Google Colab has no support for OpenCV imshow
-        print("Use Google Colab. Import OpenCV imshow patch.")
+        logging.info("Use Google Colab. Import OpenCV imshow patch.")
         from google.colab.patches import cv2_imshow
     
     
@@ -415,7 +416,7 @@ def prediction_wo_mp(source, model, device, img_size=640, save_img=False, output
         # Apply NMS
         pred = non_max_suppression(pred, conf_thres, iou_thres, classes=classes, agnostic=agnostic_nms)
         t2 = time_synchronized()
-        print(f"Interference Time: {(t2 - t1) * 1000} ms")
+        logging.debug(f"Interference Time: {(t2 - t1) * 1000} ms")
         
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -451,8 +452,8 @@ def prediction_wo_mp(source, model, device, img_size=640, save_img=False, output
                     #if save_img or view_img:  # Add bbox to image
                     label = f'{names[int(cls)]} {conf:.2f}'
                     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
-            print(f"Time for image post-processing: {(time.time() - t2) * 1000} ms")
-            print(f"Time for interference & image post-processing: {(time.time() - t1) * 1000} ms")
+            logging.debug(f"Time for image post-processing: {(time.time() - t2) * 1000} ms")
+            logging.debug(f"Time for interference & image post-processing: {(time.time() - t1) * 1000} ms")
             # Stream results
             if not use_colab:
                 if webcam:
@@ -518,7 +519,7 @@ def queue_handler(threading_queue, event_handler_thread,
         event_worker_sync.set() # now retrieve values in child processes
         
         #e = time.time()
-        #print(f"Thread got and placed value in: {(e - s) * 1000} ms")
+        #logging.debug(f"Thread got and placed value in: {(e - s) * 1000} ms")
         event_handler_thread.clear()
     
 
@@ -548,7 +549,7 @@ def worker_func(worker_id, event_terminating,
     buff_list.append(display_shm)
     display_img = np.ndarray(shape, dtype=dtype, buffer=display_shm.buf)
     
-    print(f"Calculation Worker with ID {mp.current_process()}")
+    logging.info(f"Calculation Worker with ID {mp.current_process()}")
     
     while True:
         # wait for call from main thread
@@ -557,13 +558,13 @@ def worker_func(worker_id, event_terminating,
         # check for termination event
         if not is_in_time:
             if event_terminating.is_set():
-                print(f"Stop process Calculation Worker with ID {mp.current_process()}")
+                logging.info(f"Stop process Calculation Worker with ID {mp.current_process()}")
                 break
             else:
                 continue
         
         # only one worker should acquire lock, others not be blocked
-        ret = lock_worker_sync.acquire(block=False) 
+        ret = lock_worker_sync.acquire(block=False)
         
         if ret is not False: # acquired lock
             event_worker_sync.clear() # other child processes should wait till event is set
@@ -578,7 +579,7 @@ def worker_func(worker_id, event_terminating,
             #s = time.time()
             ret = calc_feature_maps_dataset(local_array_dict, ncol=8)
             #e = time.time()
-            #print(f"Time for feature map calculation: {(e - s) * 1000} ms")
+            #logging.debug(f"Time for feature map calculation: {(e - s) * 1000} ms")
             
             # write display image
             lock_display_sync.acquire()
@@ -587,7 +588,7 @@ def worker_func(worker_id, event_terminating,
             lock_display_sync.release()
     
     # clean up
-    print(f"Closing SHM buffers in Calculation Worker with ID {mp.current_process()}")
+    logging.info(f"Closing SHM buffers in Calculation Worker with ID {mp.current_process()}")
     for buff in buff_list: 
         buff.close()
 
@@ -615,7 +616,7 @@ def calc_feature_maps_grid(img_grid, layer_inf):
     else: # downsampling
         result = cv2.resize(img_grid, dim, interpolation=cv2.INTER_AREA)
     
-    print(f'############### Shape IMG Grid: {img_grid.shape} \t DIM {dim} \t {result.shape = }')
+    logging.debug(f'############### Shape IMG Grid: {img_grid.shape} \t DIM {dim} \t {result.shape = }')
     # create new filled array of desired size
     size_x = 1080
     size_y = 480 # = size_x // n_col (from display)
@@ -680,7 +681,7 @@ def display_results(worker_id, event_terminating, metadata_display, event_displa
     existing_shm = mp.shared_memory.SharedMemory(name=buff_display_name)
     display_img = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
     
-    print(f"Display Worker with ID {mp.current_process()}")
+    logging.info(f"Display Worker with ID {mp.current_process()}")
     while True:
         # wait for call from worker processes
         is_in_time = event_display_sync.wait(timeout=2.0)
@@ -688,7 +689,7 @@ def display_results(worker_id, event_terminating, metadata_display, event_displa
         # check for termination event
         if not is_in_time:
             if event_terminating.is_set():
-                print(f"Stop process Display Worker with ID {mp.current_process()}")
+                logging.info(f"Stop process Display Worker with ID {mp.current_process()}")
                 break
             else:
                 continue
@@ -701,7 +702,7 @@ def display_results(worker_id, event_terminating, metadata_display, event_displa
         cv2.waitKey(1)
     
     # clean up
-    print(f"Closing SHM buffer in Display Worker with ID {mp.current_process()}")
+    logging.info(f"Closing SHM buffer in Display Worker with ID {mp.current_process()}")
     existing_shm.close()
     cv2.destroyAllWindows()
 
@@ -762,47 +763,47 @@ if __name__ == '__main__':
                     
     args = parser.parse_args()
     
-    
+    # configure logging level
+    logging.basicConfig(level=logging.DEBUG)
+    #logger = logging.getLogger('main')
+    #logger.setLevel(logging.INFO)
+        
     # load model on selected device
-    print("Loading and building model...")
+    logging.info("Loading and building model...")
     model, device = load_model(args.weights, data_path=args.ds_info, 
                     device_type=args.device_type, save_init_tensor_collection=False)
-    print("Model loaded.")
+    logging.info("Model loaded.")
     
     # multiprocessing preparations
-    print("Preparing multiprocessing environment")
+    logging.info("Preparing multiprocessing environment...")
     mp.set_start_method('spawn') # reproduce behaviour across different OS
     threading_queue = queue.Queue()
     mgr = mp.Manager()
-    #mp_q_in = mgr.Queue()
-    #mp_q_out = mgr.Queue()
     # main process synchronisation
     event_handler_thread = threading.Event() # synchronization of queue handler thread
-    #event_terminating = mgr.Event() # used to securely stop child processes
     event_terminating = mp.Event() # used to securely stop child processes
     
     # worker process synchronization
     event_worker_sync = mp.Event()
     lock_worker_sync = mp.Lock()
-    #event_worker_sync = mgr.Event()
-    #lock_worker_sync = mgr.Lock()
+    
     # shared memory for arrays in worker processes
     # load example data set with all necessary information
-    print("Prepare shared memory space...")
+    logging.info("Preparing shared memory space...")
     #tensor_collection_reference = load_pickle("data/tensor_collection_reference.pkl")
     tensor_collection_reference = model.tensor_collection
     buff_list = []
     metadata_worker = {}
-    print("Collecting metadata...")
+    logging.info("Collecting metadata...")
     for i, [key, array] in enumerate(tensor_collection_reference.items()):
-        print(f"Entry {i+1} \t Shape: {array.shape} \t Byte size: {array.nbytes} \t dtype: {array.dtype}")
+        logging.info(f"Entry {i+1} \t Shape: {array.shape} \t Byte size: {array.nbytes} \t dtype: {array.dtype}")
         buff_worker_name = f"worker_{i}"
         buff_size = int(array.nbytes * 2.2) # set byte size with security factor, not too large
         buff = mp.shared_memory.SharedMemory(create=True, size=buff_size, name=buff_worker_name)
         buff_list.append(buff) # save buffer to release it later
-        print(f"Entry {i+1} \t Buffer created with size {buff_size} Bytes")
+        logging.info(f"Entry {i+1} \t Buffer created with size {buff_size} Bytes")
         metadata_worker[key] = (buff_worker_name, array.shape, array.dtype)
-        print(f"Entry {i+1} \t Saved metadata")
+        logging.info(f"Entry {i+1} \t Saved metadata")
     
     
     # display process
@@ -813,8 +814,6 @@ if __name__ == '__main__':
     metadata_display = (buff_display_name, (1080,3840), np.uint8) # (buffer_name, shape, dtype)
     event_display_sync = mp.Event() # synchronize display process
     lock_display_sync = mp.Lock() # synchronize display process
-    #event_display_sync = mgr.Event() # synchronize display process
-    #lock_display_sync = mgr.Lock() # synchronize display process
     
     num_proc = args.num_proc # define number of worker processes for feature map calculation
     proc_list = []
@@ -825,33 +824,33 @@ if __name__ == '__main__':
     # keyboard listener to stop program, [ESC] configured
     listener = keyboard.Listener(on_press=program_intercept, daemon=True)
     
-    print(f"Starting {num_proc} processes...")
-    print("... for feature map calculation ...")
+    logging.info(f"Starting {num_proc} processes...")
+    logging.info("... for feature map calculation ...")
     for i in range(num_proc):
         p = mp.Process(target=worker_func, args=(i, event_terminating, 
                         metadata_worker, event_worker_sync, lock_display_sync,
                         metadata_display, event_display_sync, lock_display_sync))
         proc_list.append(p)
         p.start()
-    print("... for Display ...")
+    logging.info("... for Display ...")
     p = mp.Process(target=display_results, args=(num_proc, event_terminating, metadata_display,
                     event_display_sync, lock_display_sync))
     proc_list.append(p)
     p.start()
-    print("Processes started")
+    logging.info("Preparation of multiprocessing environment done.")
     
-    print("Starting Queue Handler Thread...")
+    logging.info("Starting Queue Handler Thread...")
     thread_QH.start()
-    print("Starting Keyboard Listener...")
+    logging.info("Starting Keyboard Listener...")
     listener.start()
-    print("To stop program use ESC key")
-    print("Starting prediction...")
+    print("--- To stop program use ESC key ---")
+    logging.info("Starting prediction...")
     with torch.no_grad():
         ret = prediction(args.source, model, device, threading_queue=threading_queue, 
                         event_handler_thread=event_handler_thread, event_terminating=event_terminating,
                         n_th_frame=args.n_th_frame, save_img=False, conf_thres=args.conf_thres)
     
-    print("Terminating processes...")
+    logging.info("Terminating processes...")
     for p in proc_list:
         p.join(5)
         if p.exitcode == None:
@@ -859,13 +858,13 @@ if __name__ == '__main__':
         p.close()
     
     # release shared memory allocations
-    print("Releasing SHM Buffers...")
+    logging.info("Releasing SHM Buffers...")
     for buff in buff_list:
         buff.close()
         buff.unlink()
     
     if args.device_type == 'gpu':
-        print("Empty GPU Memory...")
+        logging.info("Empty GPU Memory...")
         torch.cuda.empty_cache() # empty GPU memory used by PyTorch
     
     print("Program exit")
