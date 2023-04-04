@@ -3,7 +3,7 @@ Visualization of pre-chosen Yolo V7 layer feature maps
 ## Functions
 - displaying a live webcam feed with object prediction based on the [YoloV7 model](https://github.com/WongKinYiu/yolov7) with pre-trained weights on the COCO dataset
 - additional displaying of the model's feature maps for 8 pre-chosen convolutional layers ``(0,1,2,24,59,84,99,104)``
-- all information is processed in real-time with 30 FPS (tested on a Nvidia RTX 4070 Ti)
+- all information is processed in real-time with 30 FPS (tested on an Nvidia RTX 4070 Ti)
 - perform single image prediction if source is provided as path to an image file
 
 ## Installation of Conda Environment
