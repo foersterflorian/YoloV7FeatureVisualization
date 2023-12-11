@@ -120,7 +120,7 @@ class LoadWebcamThreaded:  # for inference
         return 0
 
 
-def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_init_tensor_collection=False):
+def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_init_tensor_collection=False, ncol_feature_maps=4):
     """
     loads specified model from provided path
     
@@ -147,7 +147,7 @@ def load_model(model_path, data_path='data/coco.yaml', device_type='cpu', save_i
     
     device = torch.device(device_type)
     ckpt = torch.load(model_path, map_location=device) # load model from weights
-    model = Model(ckpt['model'].yaml, ch=3, device=device, row_break_after=4).to(device) # build model with class Model from Yolo project with user-modified properties
+    model = Model(ckpt['model'].yaml, ch=3, device=device, row_break_after=ncol_feature_maps).to(device) # build model with class Model from Yolo project with user-modified properties
     
     # normalization value in model (grayscale feature map conversion)
     model.norm_val = model.norm_val.to(device)
@@ -526,7 +526,8 @@ def queue_handler(threading_queue, event_handler_thread,
 
 def worker_func(worker_id, event_terminating, 
                 metadata_worker, event_worker_sync, lock_worker_sync,
-                metadata_display, event_display_sync, lock_display_sync):
+                metadata_display, event_display_sync, lock_display_sync,
+                ncol_display, single_column_width, single_row_height):
     """
     feature map calculation worker process with shared memory (SHM) approach for faster procesing
     - write in arrays of "shm_array_dict" with lock from main handler thread
@@ -577,7 +578,9 @@ def worker_func(worker_id, event_terminating,
             
             # perform calculation
             #s = time.time()
-            ret = calc_feature_maps_dataset(local_array_dict, ncol=8)
+            ret = calc_feature_maps_dataset(local_array_dict, ncol=ncol_display, 
+                                            single_column_width=single_column_width,
+                                            single_row_height=single_row_height)
             #e = time.time()
             #logging.debug(f"Time for feature map calculation: {(e - s) * 1000} ms")
             
@@ -593,7 +596,7 @@ def worker_func(worker_id, event_terminating,
         buff.close()
 
 
-def calc_feature_maps_grid(img_grid, layer_inf):
+def calc_feature_maps_grid(img_grid, layer_inf, single_column_width=480, single_row_height=1080, safety_bounds=(10,10)):
     """
     - resizes and pads provided image grid for one layer
     Input: 
@@ -602,13 +605,33 @@ def calc_feature_maps_grid(img_grid, layer_inf):
         - layer_inf:     layer information for feature map (layer number, number of displayed outputs [max. 64], number of total outputs)
     Output: NumPy array - full resized and padded image grid for one provided layer with additional layer information
     """
+    # shifting in x-direction (vertical)
+    x_shift = 60 # shifting value from top
+    use_fixed_bound_x = True
+    # safety boundaries
+    x_safety = safety_bounds[0]
+    y_safety = safety_bounds[1]
+    # create new filled array of desired size (grid entry in display image)
+    size_x = single_row_height
+    size_y = single_column_width
+    img_canvas = np.full((size_x, size_y), 255, dtype=np.uint8)
+        
     # convert data type
     img_grid = img_grid.astype(np.uint8)
     
     # resize image
-    target_width = 340
-    scale_percent = float(target_width / img_grid.shape[1])
-    target_height = int(img_grid.shape[0] * scale_percent)
+    target_width = size_y - y_safety
+    scale_percent_width = float(target_width / img_grid.shape[1])
+    target_height = size_x - x_shift - x_safety
+    scale_percent_height = float(target_height / img_grid.shape[0])
+    
+    if scale_percent_height < scale_percent_width: # height determines width
+        target_width = int(img_grid.shape[1] * scale_percent_height)
+        scale_percent = scale_percent_height
+    else: # width determines height
+        target_height = int(img_grid.shape[0] * scale_percent_width)
+        scale_percent = scale_percent_width
+    
     dim = (target_width, target_height)
 
     if scale_percent > 1.0: # upsampling
@@ -617,15 +640,11 @@ def calc_feature_maps_grid(img_grid, layer_inf):
         result = cv2.resize(img_grid, dim, interpolation=cv2.INTER_AREA)
     
     logging.debug(f'############### Shape IMG Grid: {img_grid.shape} \t DIM {dim} \t {result.shape = }')
-    # create new filled array of desired size
-    size_x = 1080
-    size_y = 480 # = size_x // n_col (from display)
-    use_fixed_bound_x = True
-    img_canvas = np.full((size_x, size_y), 255, dtype=np.uint8)
+
     # place smaller image in the greater canvas
     # shifting values s_x, s_y
     if use_fixed_bound_x: # same distance from top
-        s_x = 60
+        s_x = x_shift
     else: # center vertically
         s_x = int((size_x - result.shape[0]) / 2)
     s_y = int((size_y - result.shape[1]) / 2) # center horizontally
@@ -639,7 +658,7 @@ def calc_feature_maps_grid(img_grid, layer_inf):
     return img_canvas
 
 
-def calc_feature_maps_dataset(data_dict, ncol=4):
+def calc_feature_maps_dataset(data_dict, ncol=4, single_column_width=480, single_row_height=1080):
     """
     For whole data set as dictionary with PyTorch Yolo tensors:
         --> func call calc_feature_maps_grid:
@@ -659,7 +678,9 @@ def calc_feature_maps_dataset(data_dict, ncol=4):
         # get normalized grid PyTorch Yolo CPU tensor with 2 dimensions (width, height)
         # ONLY USE CPU TENSORS IN MULTIPROCESSING ENVIRONMENT - SHARING OF CUDA TENSORS NOT RELIABLE
         # transform to NumPy array
-        img_grid_list.append(calc_feature_maps_grid(tensor, layer_inf))
+        img_grid_list.append(calc_feature_maps_grid(tensor, layer_inf, 
+                                                    single_column_width=single_column_width,
+                                                    single_row_height=single_row_height))
     
     # re-arrange single feature map grids into one single image
     img_grid_array = np.stack(img_grid_list)
@@ -759,19 +780,28 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--weights', dest='weights', default='data/yolov7.pt',
                     help='model weights')
     parser.add_argument('-i', '--datasetinfo', dest='ds_info', default='data/coco.yaml',
-                    help='information about trained model data like class names')                
-                    
+                    help='information about trained model data like class names') 
+    parser.add_argument('--ncol', choices=[1,2,4,8], dest='ncol_display', default=8, type=int,
+                    help='total number of columns in final display image')
+    parser.add_argument('--ncolFM', choices=[1,2,4,8], dest='ncol_feature_maps', default=4, type=int,
+                    help='total number of columns in the feature maps grid')
+    parser.add_argument('--height', dest='total_height_display', default=1060, type=int,
+                    help='total height of final display image')
+    parser.add_argument('--width', dest='total_width_display', default=3840, type=int,
+                    help='total width of final display image')
+                       
     args = parser.parse_args()
     
     # configure logging level
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     #logger = logging.getLogger('main')
     #logger.setLevel(logging.INFO)
         
     # load model on selected device
     logging.info("Loading and building model...")
     model, device = load_model(args.weights, data_path=args.ds_info, 
-                    device_type=args.device_type, save_init_tensor_collection=False)
+                    device_type=args.device_type, save_init_tensor_collection=False, 
+                    ncol_feature_maps=args.ncol_feature_maps)
     logging.info("Model loaded.")
     
     # multiprocessing preparations
@@ -808,10 +838,18 @@ if __name__ == '__main__':
     
     # display process
     buff_display_name = "display"
-    buff_display = mp.shared_memory.SharedMemory(create=True, size=5000000, name=buff_display_name)
+    buff_display_size = int(1.05 * args.total_height_display * args.total_width_display) # 1 byte per entry as uint8 single-channel
+    buff_display = mp.shared_memory.SharedMemory(create=True, size=buff_display_size, name=buff_display_name)
     buff_list.append(buff_display)
+    # determine variable layout
+    total_num_layers = 8 # set at Yolo model initialization
+    ncol_display = args.ncol_display
+    nrow_display = total_num_layers // ncol_display
+    # size calculation of single grid entry in display image
+    single_column_width = args.total_width_display // ncol_display ########### --> size_y in calc_feature_map
+    single_row_height = args.total_height_display // nrow_display ########### --> size_x in calc_feature_map
     # shape depends on given layout
-    metadata_display = (buff_display_name, (1080,3840), np.uint8) # (buffer_name, shape, dtype)
+    metadata_display = (buff_display_name, (args.total_height_display,args.total_width_display), np.uint8) # (buffer_name, shape, dtype)
     event_display_sync = mp.Event() # synchronize display process
     lock_display_sync = mp.Lock() # synchronize display process
     
@@ -829,7 +867,8 @@ if __name__ == '__main__':
     for i in range(num_proc):
         p = mp.Process(target=worker_func, args=(i, event_terminating, 
                         metadata_worker, event_worker_sync, lock_display_sync,
-                        metadata_display, event_display_sync, lock_display_sync))
+                        metadata_display, event_display_sync, lock_display_sync,
+                        ncol_display, single_column_width, single_row_height))
         proc_list.append(p)
         p.start()
     logging.info("... for Display ...")
